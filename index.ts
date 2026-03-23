@@ -57,6 +57,12 @@ import {
   isUserMdExclusiveMemory,
   type WorkspaceBoundaryConfig,
 } from "./src/workspace-boundary.js";
+import {
+  normalizeAdmissionControlConfig,
+  resolveRejectedAuditFilePath,
+  type AdmissionControlConfig,
+  type AdmissionRejectionAuditEntry,
+} from "./src/admission-control.js";
 
 // ============================================================================
 // Configuration & Types
@@ -175,6 +181,7 @@ interface PluginConfig {
   };
   mdMirror?: { enabled?: boolean; dir?: string };
   workspaceBoundary?: WorkspaceBoundaryConfig;
+  admissionControl?: AdmissionControlConfig;
 }
 
 type ReflectionThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
@@ -1587,6 +1594,36 @@ function createMdMirrorWriter(
 }
 
 // ============================================================================
+// Admission Control Audit Writer
+// ============================================================================
+
+function createAdmissionRejectionAuditWriter(
+  config: PluginConfig,
+  resolvedDbPath: string,
+  api: OpenClawPluginApi,
+): ((entry: AdmissionRejectionAuditEntry) => Promise<void>) | null {
+  if (
+    config.admissionControl?.enabled !== true ||
+    config.admissionControl.persistRejectedAudits !== true
+  ) {
+    return null;
+  }
+
+  const filePath = api.resolvePath(
+    resolveRejectedAuditFilePath(resolvedDbPath, config.admissionControl),
+  );
+
+  return async (entry: AdmissionRejectionAuditEntry) => {
+    try {
+      await mkdir(dirname(filePath), { recursive: true });
+      await appendFile(filePath, `${JSON.stringify(entry)}\n`, "utf8");
+    } catch (err) {
+      api.logger.warn(`memory-lancedb-pro: admission rejection audit write failed: ${String(err)}`);
+    }
+  };
+}
+
+// ============================================================================
 // Version
 // ============================================================================
 
@@ -1714,12 +1751,20 @@ const memoryLanceDBProPlugin = {
           api.logger.debug(`memory-lancedb-pro: noise bank init: ${String(err)}`),
         );
 
+        const admissionRejectionAuditWriter = createAdmissionRejectionAuditWriter(
+          config,
+          resolvedDbPath,
+          api,
+        );
+
         smartExtractor = new SmartExtractor(store, embedder, llmClient, {
           user: "User",
           extractMinMessages: config.extractMinMessages ?? 4,
           extractMaxChars: config.extractMaxChars ?? 8000,
           defaultScope: config.scopes?.default ?? "global",
           workspaceBoundary: config.workspaceBoundary,
+          admissionControl: config.admissionControl,
+          onAdmissionRejected: admissionRejectionAuditWriter ?? undefined,
           log: (msg: string) => api.logger.info(msg),
           debugLog: (msg: string) => api.logger.debug(msg),
           noiseBank,
@@ -3651,6 +3696,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
             : undefined,
         }
         : undefined,
+    admissionControl: normalizeAdmissionControlConfig(cfg.admissionControl),
   };
 }
 
