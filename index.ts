@@ -2113,94 +2113,6 @@ const memoryLanceDBProPlugin = {
       }
     );
 
-    // ========================================================================
-    // Memory Compaction (Progressive Summarization)
-    // ========================================================================
-
-    if (config.enableManagementTools) {
-      api.registerTool({
-        name: "memory_compact",
-        description:
-          "Consolidate semantically similar old memories into refined single entries " +
-          "(progressive summarization). Reduces noise and improves retrieval quality over time. " +
-          "Use dry_run:true first to preview the compaction plan without making changes.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            dry_run: {
-              type: "boolean",
-              description: "Preview clusters without writing changes. Default: false.",
-            },
-            min_age_days: {
-              type: "number",
-              description: "Only compact memories at least this many days old. Default: 7.",
-            },
-            similarity_threshold: {
-              type: "number",
-              description: "Cosine similarity threshold for clustering [0-1]. Default: 0.88.",
-            },
-            scopes: {
-              type: "array",
-              items: { type: "string" },
-              description: "Scope filter. Omit to compact all scopes.",
-            },
-          },
-          required: [],
-        },
-        execute: async (args: Record<string, unknown>) => {
-          const compactionCfg: CompactionConfig = {
-            enabled: true,
-            minAgeDays:
-              typeof args.min_age_days === "number"
-                ? args.min_age_days
-                : (config.memoryCompaction?.minAgeDays ?? 7),
-            similarityThreshold:
-              typeof args.similarity_threshold === "number"
-                ? Math.max(0, Math.min(1, args.similarity_threshold))
-                : (config.memoryCompaction?.similarityThreshold ?? 0.88),
-            minClusterSize: config.memoryCompaction?.minClusterSize ?? 2,
-            maxMemoriesToScan: config.memoryCompaction?.maxMemoriesToScan ?? 200,
-            dryRun: args.dry_run === true,
-            cooldownHours: config.memoryCompaction?.cooldownHours ?? 24,
-          };
-          const scopes =
-            Array.isArray(args.scopes) && args.scopes.length > 0
-              ? (args.scopes as string[])
-              : undefined;
-
-          const result = await runCompaction(
-            store,
-            embedder,
-            compactionCfg,
-            scopes,
-            api.logger,
-          );
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    scanned: result.scanned,
-                    clustersFound: result.clustersFound,
-                    memoriesDeleted: result.memoriesDeleted,
-                    memoriesCreated: result.memoriesCreated,
-                    dryRun: result.dryRun,
-                    summary: result.dryRun
-                      ? `Dry run: found ${result.clustersFound} cluster(s) in ${result.scanned} memories — no changes made.`
-                      : `Compacted ${result.memoriesDeleted} memories into ${result.memoriesCreated} consolidated entries.`,
-                  },
-                  null,
-                  2,
-                ),
-              },
-            ],
-          };
-        },
-      });
-    }
-
     // Auto-compaction at gateway_start (if enabled, respects cooldown)
     if (config.memoryCompaction?.enabled) {
       api.on("gateway_start", () => {
@@ -3964,6 +3876,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     autoRecallMaxChars: parsePositiveInt(cfg.autoRecallMaxChars) ?? 600,
     autoRecallPerItemMaxChars: parsePositiveInt(cfg.autoRecallPerItemMaxChars) ?? 180,
     autoRecallMaxQueryLength: clampInt(parsePositiveInt(cfg.autoRecallMaxQueryLength) ?? 2_000, 100, 10_000),
+    autoRecallTimeoutMs: parsePositiveInt(cfg.autoRecallTimeoutMs) ?? 5000,
     maxRecallPerTurn: parsePositiveInt(cfg.maxRecallPerTurn) ?? 10,
     recallMode: (cfg.recallMode === "full" || cfg.recallMode === "summary" || cfg.recallMode === "adaptive" || cfg.recallMode === "off") ? cfg.recallMode : "full",
     autoRecallExcludeAgents: Array.isArray(cfg.autoRecallExcludeAgents)
